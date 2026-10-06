@@ -45,10 +45,11 @@
   <!-- ลงทะเบียนครั้งแรก -->
   <section id="vRegister" class="card hide">
     <h2>ลงทะเบียนครั้งแรก</h2>
-    <label>ชื่อ-นามสกุล</label>
-    <input id="regName" type="text" placeholder="เช่น สมชาย ใจดี">
-    <label style="display:block;margin-top:10px">Hub ที่ประจำ</label>
+    <label>1) Hub ที่ประจำ</label>
     <select id="regHub"></select>
+    <label style="display:block;margin-top:10px">2) ชื่อ-นามสกุล</label>
+    <select id="regName" disabled><option value="">— เลือก Hub ก่อน —</option></select>
+    <div class="meta">ไม่พบชื่อ? แจ้งแอดมินให้เพิ่มชื่อในแท็บ Leaders</div>
     <div style="height:12px"></div>
     <button class="btn" id="btnReg">ส่งคำขอใช้งาน</button>
   </section>
@@ -73,6 +74,14 @@
       <input id="q" type="search" placeholder="ค้นหา Ops ID หรือชื่อ">
       <div class="chips" id="chips"></div>
       <div class="list" id="list"></div>
+    </div>
+
+    <div class="card hide" id="geoCard">
+      <h2>📍 พิกัด Hub</h2>
+      <div id="geoStatus" class="meta" style="margin:0 0 10px"></div>
+      <select id="geoHub" class="hide" style="margin-bottom:10px"></select>
+      <button class="btn sec" id="btnGeo">ตั้งพิกัด Hub จากตำแหน่งปัจจุบัน</button>
+      <div class="meta">กดตอนยืนอยู่ในพื้นที่ Hub เท่านั้น ระบบใช้พิกัดนี้ตรวจว่ารูปถ่ายที่ Hub จริง</div>
     </div>
 
     <div class="card">
@@ -128,13 +137,27 @@ async function api(action, body={}) {
       show('vRegister'); return;
     }
     if(r.me.status!=='approved'){ show('vPending'); return; }
-    S.staff = r.staff; renderList(); show('vMain'); startGps(); startCamera();
+    S.staff = r.staff; S.me = r.me; S.hubGeo = r.hubGeo; S.hubs = r.hubs || []; renderList(); show('vMain'); startGps(); startCamera(); renderGeo();
   }catch(e){ msg('❌ '+esc(e.message),'err'); }
 })();
 
+$('regHub').onchange = async ()=>{
+  const hub=$('regHub').value, sel=$('regName');
+  sel.disabled=true;
+  if(!hub){ sel.innerHTML='<option value="">— เลือก Hub ก่อน —</option>'; return; }
+  sel.innerHTML='<option value="">กำลังโหลดรายชื่อ…</option>';
+  try{
+    const r=await api('names',{hub});
+    const grp=(label,arr)=>arr.length?`<optgroup label="${label}">`+arr.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+'</optgroup>':'';
+    const leaders=r.names.filter(n=>n.type==='leader').map(n=>n.label), staff=r.names.filter(n=>n.type==='staff').map(n=>n.label);
+    sel.innerHTML='<option value="">— เลือกชื่อ —</option>'+grp('หัวหน้า / แอดมิน',leaders)+grp('พนักงานใน Hub',staff);
+    sel.disabled=!r.names.length;
+    if(!r.names.length) sel.innerHTML='<option value="">ยังไม่มีรายชื่อใน Hub นี้</option>';
+  }catch(e){ msg('❌ '+esc(e.message),'err'); sel.innerHTML='<option value="">โหลดไม่สำเร็จ</option>'; }
+};
 $('btnReg').onclick = async ()=>{
   const fullName=$('regName').value.trim(), hub=$('regHub').value;
-  if(!fullName||!hub) return msg('กรุณากรอกชื่อและเลือก Hub','err');
+  if(!fullName||!hub) return msg('กรุณาเลือก Hub และชื่อ','err');
   $('btnReg').disabled=true;
   try{ await api('register',{fullName,hub}); msg(''); show('vPending'); }
   catch(e){ msg('❌ '+esc(e.message),'err'); $('btnReg').disabled=false; }
@@ -156,6 +179,34 @@ function renderList(){
 }
 $('q').oninput=renderList;
 $('list').onchange=e=>{ if(e.target.type!=='checkbox')return; e.target.checked?S.sel.add(e.target.value):S.sel.delete(e.target.value); renderList(); };
+
+/* ---------- พิกัด Hub ---------- */
+function renderGeo(){
+  const admin = S.me && S.me.role==='admin';
+  const has = S.hubGeo && S.hubGeo.lat;
+  // leader เห็นปุ่มเฉพาะตอน Hub ยังไม่มีพิกัด, admin เห็นเสมอ
+  if(!admin && has){ $('geoCard').classList.add('hide'); return; }
+  $('geoCard').classList.remove('hide');
+  if(admin){
+    $('geoHub').classList.remove('hide');
+    $('geoHub').innerHTML = S.hubs.map(h=>`<option value="${esc(h.code)}" ${h.code===S.me.hub?'selected':''}>${esc(h.code)} ${h.name!==h.code?esc(h.name):''}</option>`).join('');
+  }
+  $('geoStatus').innerHTML = has
+    ? `Hub ${esc(S.me.hub)} มีพิกัดแล้ว: ${S.hubGeo.lat}, ${S.hubGeo.lng}`
+    : `⚠️ Hub ${esc(S.me.hub||'')} ยังไม่มีพิกัด (ระบบจะเรียนรู้เองจากรูป 5 รูปแรก หรือกดปุ่มด้านล่างเพื่อตั้งทันที)`;
+}
+$('btnGeo').onclick = async ()=>{
+  if(!S.pos) return msg('ยังจับตำแหน่งไม่ได้ กรุณาเปิด GPS แล้วรอสักครู่','err');
+  const hub = (S.me.role==='admin') ? $('geoHub').value : S.me.hub;
+  if(!confirm(`ตั้งพิกัด Hub ${hub} เป็นตำแหน่งปัจจุบัน?\n(±${Math.round(S.pos.accuracy)} ม.)`)) return;
+  $('btnGeo').disabled=true;
+  try{
+    const r = await api('setHubLocation',{hub, lat:S.pos.latitude, lng:S.pos.longitude, accuracy:Math.round(S.pos.accuracy)});
+    if(r.hub===S.me.hub) S.hubGeo = {lat:r.lat, lng:r.lng};
+    msg(`✅ ตั้งพิกัด Hub ${esc(r.hub)} แล้ว (±${r.accuracy} ม.)`,'ok'); renderGeo();
+  }catch(e){ msg('❌ '+esc(e.message),'err'); }
+  finally{ $('btnGeo').disabled=false; }
+};
 
 /* ---------- GPS ---------- */
 function startGps(){
